@@ -1,0 +1,13 @@
+{
+  "name": "legacy-hr-payroll-agent-lab",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser-use / computer-use AI agent lab for a legacy Japanese HR and payroll web application.",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
