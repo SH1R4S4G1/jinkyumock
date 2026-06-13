@@ -69,6 +69,7 @@ export default function ConversationPanel({
 }) {
   const hasMessages = messages.length > 0;
   const feedRef = useRef(null);
+  const composingRef = useRef(false);
 
   useEffect(() => {
     const feed = feedRef.current;
@@ -78,6 +79,13 @@ export default function ConversationPanel({
   }, [messages]);
 
   function handleKeyDown(event) {
+    if (
+      composingRef.current ||
+      event.nativeEvent?.isComposing ||
+      event.keyCode === 229
+    ) {
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();
@@ -158,6 +166,12 @@ export default function ConversationPanel({
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={handleKeyDown}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+            }}
             placeholder={hasMessages ? "続けて指示を入力…" : "指示を入力…"}
             disabled={active}
             rows={3}

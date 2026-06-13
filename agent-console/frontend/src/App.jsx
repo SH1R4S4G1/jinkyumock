@@ -69,6 +69,8 @@ export default function App() {
   const eventSourceRef = useRef(null);
   const activeAssistantIdRef = useRef("");
   const latestErrorRef = useRef("");
+  const conversationIdRef = useRef("");
+  const submissionPendingRef = useRef(false);
   const traceScrollRef = useRef(null);
 
   const active = ACTIVE_STATUSES.includes(status);
@@ -158,6 +160,7 @@ export default function App() {
         });
       }
       if (TERMINAL_STATUSES.includes(event.status)) {
+        submissionPendingRef.current = false;
         eventSourceRef.current?.close();
       }
       return;
@@ -220,9 +223,14 @@ export default function App() {
   async function sendInstruction(event) {
     event.preventDefault();
     const instruction = draft.trim();
-    if (!instruction || active) return;
+    if (!instruction || active || submissionPendingRef.current) return;
 
+    submissionPendingRef.current = true;
     eventSourceRef.current?.close();
+    const nextConversationId =
+      conversationIdRef.current || conversationId || crypto.randomUUID();
+    conversationIdRef.current = nextConversationId;
+    setConversationId(nextConversationId);
     const userMessage = createMessage("user", { text: instruction });
     const assistantMessage = createMessage("assistant", { state: "running" });
     activeAssistantIdRef.current = assistantMessage.id;
@@ -233,6 +241,7 @@ export default function App() {
     setResult(null);
     setSteps([]);
     setRunId("");
+    setStatus("queued");
     setElapsed(0);
     startedAtRef.current = Date.now();
 
@@ -242,7 +251,8 @@ export default function App() {
       allowed_domains: parseDomains(settings.allowedDomains),
       provider: settings.provider,
       model: settings.model.trim(),
-      conversation_id: conversationId || null,
+      conversation_id: nextConversationId,
+      request_id: crypto.randomUUID(),
       headless: !settings.showBrowser,
       max_steps: Number(settings.maxSteps),
       safety: {
@@ -266,6 +276,7 @@ export default function App() {
 
       setRunId(body.id);
       setConversationId(body.conversation_id);
+      conversationIdRef.current = body.conversation_id;
       setStatus("queued");
       const source = new EventSource(
         `${API_BASE}/api/runs/${encodeURIComponent(body.id)}/events`,
@@ -273,6 +284,7 @@ export default function App() {
       eventSourceRef.current = source;
       source.onmessage = (message) => handleEvent(JSON.parse(message.data));
       source.onerror = () => {
+        submissionPendingRef.current = false;
         source.close();
         setStatus((current) =>
           TERMINAL_STATUSES.includes(current) ? current : "failed",
@@ -283,6 +295,7 @@ export default function App() {
         updateAssistantMessage({ state: "failed", text: message });
       };
     } catch (runError) {
+      submissionPendingRef.current = false;
       latestErrorRef.current = runError.message;
       setStatus("failed");
       setError(runError.message);
@@ -305,9 +318,11 @@ export default function App() {
 
   async function closeConversation() {
     eventSourceRef.current?.close();
-    if (conversationId) {
+    const currentConversationId =
+      conversationIdRef.current || conversationId;
+    if (currentConversationId) {
       await fetch(
-        `${API_BASE}/api/conversations/${encodeURIComponent(conversationId)}`,
+        `${API_BASE}/api/conversations/${encodeURIComponent(currentConversationId)}`,
         { method: "DELETE" },
       ).catch(() => {});
     }
@@ -316,6 +331,8 @@ export default function App() {
   async function startNewConversation() {
     if (active) return;
     await closeConversation();
+    submissionPendingRef.current = false;
+    conversationIdRef.current = "";
     setConversationId("");
     setMessages([]);
     setSteps([]);
@@ -341,6 +358,8 @@ export default function App() {
     }
     if (nextUrl === targetUrl) return;
     await closeConversation();
+    submissionPendingRef.current = false;
+    conversationIdRef.current = "";
     setTargetUrl(nextUrl);
     setConversationId("");
     setMessages([]);

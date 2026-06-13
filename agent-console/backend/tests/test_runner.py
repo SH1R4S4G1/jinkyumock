@@ -92,6 +92,44 @@ def test_conversation_configuration_must_remain_stable():
     asyncio.run(exercise())
 
 
+def test_duplicate_request_id_reuses_the_same_run():
+    async def exercise():
+        manager = RunManager()
+        manager._execute = lambda run: asyncio.sleep(0)
+        request = make_request(
+            conversation_id="conversation-1",
+            request_id="request-1",
+        )
+
+        first = manager.create(request)
+        second = manager.create(request)
+
+        assert second is first
+        assert len(manager.runs) == 1
+        await asyncio.sleep(0)
+
+    asyncio.run(exercise())
+
+
+def test_same_conversation_rejects_a_second_pending_run():
+    async def exercise():
+        manager = RunManager()
+        manager._execute = lambda run: asyncio.sleep(0)
+        first = manager.create(make_request(conversation_id="conversation-1"))
+        assert first.status == "queued"
+
+        try:
+            manager.create(make_request(conversation_id="conversation-1"))
+        except ValueError as exc:
+            assert "別の指示を実行中" in str(exc)
+        else:
+            raise AssertionError("a second pending run must be rejected")
+
+        await asyncio.sleep(0)
+
+    asyncio.run(exercise())
+
+
 def test_close_conversation_kills_keep_alive_browser_before_agent_cleanup():
     async def exercise():
         events = []
@@ -109,6 +147,7 @@ def test_close_conversation_kills_keep_alive_browser_before_agent_cleanup():
             lock=asyncio.Lock(),
             browser=BrowserStub(),
             agent=AgentStub(),
+            active_run_id=None,
         )
 
         assert await manager.close_conversation("conversation-1")

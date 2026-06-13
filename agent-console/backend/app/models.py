@@ -17,6 +17,7 @@ class RunRequest(BaseModel):
     provider: Literal["google", "openai", "anthropic", "browser-use"] = "google"
     model: str = Field(default="gemini-2.5-flash", min_length=1, max_length=200)
     conversation_id: str | None = Field(default=None, max_length=64)
+    request_id: str | None = Field(default=None, max_length=64)
     headless: bool = True
     max_steps: int = Field(default=30, ge=1, le=100)
     safety: SafetyOptions = Field(default_factory=SafetyOptions)

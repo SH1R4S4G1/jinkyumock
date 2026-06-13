@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import logging
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -12,6 +13,7 @@ from .models import RunRequest
 
 
 TERMINAL_STATUSES = {"failed", "stopped", "completed"}
+logger = logging.getLogger("agent-console.runner")
 
 
 def utc_time() -> str:
@@ -151,6 +153,7 @@ class AgentSession:
     browser: Any = None
     agent: Any = None
     run_count: int = 0
+    active_run_id: str | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -158,6 +161,7 @@ class RunManager:
     def __init__(self) -> None:
         self.runs: dict[str, RunRecord] = {}
         self.sessions: dict[str, AgentSession] = {}
+        self.request_runs: dict[str, str] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
 
     @staticmethod
@@ -174,6 +178,16 @@ class RunManager:
         if not domain_matches(request.target_url, request.allowed_domains):
             raise ValueError("対象URLが許可ドメインに含まれていません。")
 
+        if request.request_id:
+            existing_run_id = self.request_runs.get(request.request_id)
+            if existing_run_id:
+                logger.warning(
+                    "Duplicate run request reused: request_id=%s run_id=%s",
+                    request.request_id,
+                    existing_run_id,
+                )
+                return self.runs[existing_run_id]
+
         conversation_id = request.conversation_id or uuid.uuid4().hex[:12]
         signature = self._session_signature(request)
         session = self.sessions.get(conversation_id)
@@ -182,13 +196,14 @@ class RunManager:
                 "同じ会話では対象URL・許可ドメイン・モデル設定を変更できません。"
                 "新しい会話を開始してください。"
             )
-        if session and session.lock.locked():
+        if session and session.active_run_id:
             raise ValueError("この会話では別の指示を実行中です。")
         if not session:
-            self.sessions[conversation_id] = AgentSession(
+            session = AgentSession(
                 id=conversation_id,
                 signature=signature,
             )
+            self.sessions[conversation_id] = session
 
         run = RunRecord(
             id=uuid.uuid4().hex[:12],
@@ -196,6 +211,15 @@ class RunManager:
             request=request,
         )
         self.runs[run.id] = run
+        session.active_run_id = run.id
+        if request.request_id:
+            self.request_runs[request.request_id] = run.id
+        logger.info(
+            "Run accepted: run_id=%s conversation_id=%s request_id=%s",
+            run.id,
+            conversation_id,
+            request.request_id or "-",
+        )
         task = asyncio.create_task(self._execute(run))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -205,7 +229,7 @@ class RunManager:
         return self.runs.get(run_id)
 
     async def close_conversation(self, conversation_id: str) -> bool:
-        session = self.sessions.pop(conversation_id, None)
+        session = self.sessions.get(conversation_id)
         if not session:
             return False
         async with session.lock:
@@ -213,6 +237,8 @@ class RunManager:
                 await session.browser.kill()
             if session.agent is not None:
                 await session.agent.close()
+        if self.sessions.get(conversation_id) is session:
+            self.sessions.pop(conversation_id, None)
         return True
 
     async def _execute(self, run: RunRecord) -> None:
@@ -225,6 +251,10 @@ class RunManager:
         except Exception as exc:
             run.emit("error", message=str(exc))
             run.set_status("failed")
+        finally:
+            session = self.sessions.get(run.conversation_id)
+            if session and session.active_run_id == run.id:
+                session.active_run_id = None
 
     async def _execute_live(self, run: RunRecord) -> None:
         if not browser_use_available():
