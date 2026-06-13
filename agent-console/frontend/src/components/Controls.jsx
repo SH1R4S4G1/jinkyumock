@@ -1,40 +1,18 @@
 import { Check } from "lucide-react";
 
-export function CheckControl({ label, checked, onChange }) {
+export function CheckControl({ label, checked, onChange, disabled = false }) {
   return (
     <label className="check-control">
       <input
         type="checkbox"
         checked={checked}
         onChange={(event) => onChange(event.target.checked)}
+        disabled={disabled}
       />
       <span className="checkbox-visual">
         <Check size={13} />
       </span>
       <span>{label}</span>
-    </label>
-  );
-}
-
-export function RadioControl({
-  label,
-  description,
-  checked,
-  onChange,
-}) {
-  return (
-    <label className={`radio-control ${checked ? "selected" : ""}`}>
-      <input
-        type="radio"
-        name="execution-mode"
-        checked={checked}
-        onChange={onChange}
-      />
-      <span className="radio-dot" />
-      <span>
-        <strong>{label}</strong>
-        <small>{description}</small>
-      </span>
     </label>
   );
 }

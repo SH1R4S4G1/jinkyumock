@@ -37,13 +37,15 @@ export function TimelineItem({ item }) {
         </div>
         <h3>{item.title}</h3>
         <p>{item.detail}</p>
-        {item.actions?.length > 0 && <code>{JSON.stringify(item.actions[0])}</code>}
+        {item.actions?.length > 0 && (
+          <code>{JSON.stringify(item.actions[0])}</code>
+        )}
       </div>
     </article>
   );
 }
 
-export function ResultPanel({
+function EvidencePanel({
   result,
   status,
   error,
@@ -51,29 +53,12 @@ export function ResultPanel({
   onDownload,
   copied,
 }) {
-  const entries = displayEntries(result?.result);
+  const entries = displayEntries(result?.result).filter(
+    ([key]) => key !== "summary",
+  );
   const complete = status === "completed" && result;
   const stopped = status === "stopped";
   const failed = status === "failed";
-  const emptyState = stopped
-    ? {
-        heading: "実行を停止しました",
-        badge: "停止済み",
-        detail: "停止要求を受け付け、安全に実行を終了しました。",
-      }
-    : failed
-      ? {
-          heading: "実行に失敗しました",
-          badge: "失敗",
-          detail: error || "実行ログを確認してください。",
-        }
-      : {
-          heading: "結果を待機しています",
-          badge: "待機",
-          detail:
-            "検証ステップが完了すると、要約と抽出データを表示します。",
-        };
-
   const StatusIcon = complete
     ? Check
     : stopped
@@ -81,30 +66,41 @@ export function ResultPanel({
       : failed
         ? X
         : LoaderCircle;
-  const EmptyIcon = stopped ? CircleStop : failed ? X : FileBraces;
 
   return (
     <section
-      className={`result-panel ${complete ? "complete" : ""} ${failed ? "failed" : ""}`}
+      className={`evidence-panel ${complete ? "complete" : ""} ${failed ? "failed" : ""}`}
     >
-      <div className="result-heading">
+      <div className="evidence-heading">
         <div>
-          <span>実行結果</span>
-          <h2>{complete ? "検証が完了しました" : emptyState.heading}</h2>
+          <span>結果</span>
+          <h2>
+            {complete
+              ? "検証が完了しました"
+              : stopped
+                ? "実行を停止しました"
+                : failed
+                  ? "実行に失敗しました"
+                  : "結果を待機しています"}
+          </h2>
         </div>
-        <div className="result-status">
+        <div className="evidence-status">
           <StatusIcon size={14} />
-          {complete ? "完了" : emptyState.badge}
+          {complete
+            ? "完了"
+            : stopped
+              ? "停止済み"
+              : failed
+                ? "失敗"
+                : "待機"}
         </div>
       </div>
 
       {complete ? (
         <>
-          <p className="result-summary">
-            {result.result?.summary || "実行結果を取得しました。"}
-          </p>
+          <p className="evidence-summary">{result.result?.summary}</p>
           {entries.length > 0 && (
-            <dl className="result-data">
+            <dl className="evidence-data">
               {entries.map(([key, value]) => (
                 <div key={key}>
                   <dt>{key.replaceAll("_", " ")}</dt>
@@ -113,27 +109,81 @@ export function ResultPanel({
               ))}
             </dl>
           )}
-          {result.result?.note && (
-            <div className="result-note">{result.result.note}</div>
-          )}
-          <div className="result-actions">
+          <div className="evidence-actions">
             <button type="button" onClick={onCopy}>
-              {copied ? <Check size={16} /> : <Clipboard size={16} />}
+              {copied ? <Check size={15} /> : <Clipboard size={15} />}
               {copied ? "コピー済み" : "JSONをコピー"}
             </button>
             <button type="button" onClick={onDownload}>
-              <Download size={16} />
-              実行ログを保存
+              <Download size={15} />
+              実行ログ
             </button>
           </div>
         </>
       ) : (
-        <div className="result-empty">
-          <EmptyIcon size={24} />
-          <p>{emptyState.detail}</p>
+        <div className="evidence-empty">
+          {stopped ? (
+            <CircleStop size={22} />
+          ) : failed ? (
+            <X size={22} />
+          ) : (
+            <FileBraces size={22} />
+          )}
+          <p>
+            {failed
+              ? error || "実行ログを確認してください。"
+              : stopped
+                ? "ブラウザセッションは会話内に保持されています。"
+                : "実行が完了すると検証結果を表示します。"}
+          </p>
         </div>
       )}
     </section>
+  );
+}
+
+export default function TracePanel({
+  steps,
+  result,
+  status,
+  error,
+  onCopy,
+  onDownload,
+  copied,
+  scrollRef,
+}) {
+  return (
+    <aside className="trace-panel">
+      <div className="panel-heading">
+        <h2>エージェントの進行</h2>
+      </div>
+      <div className="trace-scroll" ref={scrollRef}>
+        <div className="timeline">
+          {steps.length === 0 ? (
+            <div className="trace-empty">
+              <FileBraces size={24} />
+              <strong>実行トレースはここに表示されます</strong>
+              <p>計画、観察、操作、検証をステップごとに確認できます。</p>
+            </div>
+          ) : (
+            steps.map((step) => (
+              <TimelineItem
+                key={`${step.step}-${step.stage}`}
+                item={step}
+              />
+            ))
+          )}
+        </div>
+        <EvidencePanel
+          result={result}
+          status={status}
+          error={error}
+          onCopy={onCopy}
+          onDownload={onDownload}
+          copied={copied}
+        />
+      </div>
+    </aside>
   );
 }
 

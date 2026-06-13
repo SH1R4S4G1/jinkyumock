@@ -1,10 +1,16 @@
 import asyncio
+from types import SimpleNamespace
 
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.models import RunRequest
-from app.runner import RunManager, build_agent_task, domain_matches
+from app.runner import (
+    RunManager,
+    browser_event_payload,
+    build_agent_task,
+    domain_matches,
+)
 
 
 def make_request(**overrides):
@@ -12,7 +18,6 @@ def make_request(**overrides):
         "target_url": "http://127.0.0.1:4173",
         "task": "対象画面を開き、表示内容を確認してください。",
         "allowed_domains": ["http://127.0.0.1:4173"],
-        "execution_mode": "demo",
     }
     data.update(overrides)
     return RunRequest(**data)
@@ -39,17 +44,76 @@ def test_build_agent_task_includes_safety_constraints():
     assert "verify the visible result" in task
 
 
-def test_demo_run_reaches_completed_state():
+def test_follow_up_task_includes_continuation_instruction():
+    task = build_agent_task(make_request(), follow_up=True)
+    assert "follow-up instruction" in task
+    assert "current page" in task
+    assert "Start from this URL" not in task
+
+
+def test_browser_event_reads_dataclass_style_attributes():
+    state = SimpleNamespace(
+        url="http://127.0.0.1:4173/customer/1",
+        title="顧客詳細",
+        screenshot="base64-image",
+    )
+    assert browser_event_payload(
+        state,
+        fallback_url="http://127.0.0.1:4173",
+        step_number=4,
+    ) == {
+        "url": "http://127.0.0.1:4173/customer/1",
+        "title": "顧客詳細",
+        "screenshot": "base64-image",
+        "frame": 4,
+    }
+
+
+def test_conversation_configuration_must_remain_stable():
     async def exercise():
         manager = RunManager()
-        run = manager.create(make_request())
-        for _ in range(80):
-            if run.status == "completed":
-                break
-            await asyncio.sleep(0.1)
-        assert run.status == "completed"
-        assert any(event["type"] == "result" for event in run.events)
-        assert sum(event["type"] == "step" for event in run.events) == 4
+        manager._execute = lambda run: asyncio.sleep(0)
+        first = manager.create(make_request(conversation_id="conversation-1"))
+        assert first.conversation_id == "conversation-1"
+
+        second = make_request(
+            conversation_id="conversation-1",
+            model="different-model",
+        )
+        try:
+            manager.create(second)
+        except ValueError as exc:
+            assert "新しい会話" in str(exc)
+        else:
+            raise AssertionError("configuration change must be rejected")
+
+        await asyncio.sleep(0)
+
+    asyncio.run(exercise())
+
+
+def test_close_conversation_kills_keep_alive_browser_before_agent_cleanup():
+    async def exercise():
+        events = []
+
+        class BrowserStub:
+            async def kill(self):
+                events.append("browser.kill")
+
+        class AgentStub:
+            async def close(self):
+                events.append("agent.close")
+
+        manager = RunManager()
+        manager.sessions["conversation-1"] = SimpleNamespace(
+            lock=asyncio.Lock(),
+            browser=BrowserStub(),
+            agent=AgentStub(),
+        )
+
+        assert await manager.close_conversation("conversation-1")
+        assert events == ["browser.kill", "agent.close"]
+        assert "conversation-1" not in manager.sessions
 
     asyncio.run(exercise())
 
@@ -64,6 +128,6 @@ def test_health_endpoint():
             response = await client.get("/api/health")
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
-        assert response.json()["demo_available"] is True
+        assert "demo_available" not in response.json()
 
     asyncio.run(exercise())

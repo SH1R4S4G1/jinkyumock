@@ -1,42 +1,8 @@
-import {
-  Eye,
-  MousePointerClick,
-  ShieldCheck,
-  Sparkles,
-} from "lucide-react";
+import { Eye, MousePointerClick, ShieldCheck, Sparkles } from "lucide-react";
 
 export const API_BASE = import.meta.env.VITE_API_BASE || "";
 export const DEFAULT_TARGET_URL =
   import.meta.env.VITE_DEFAULT_TARGET_URL || "http://127.0.0.1:4173";
-
-export const SCENARIOS = {
-  blank: {
-    label: "自由入力",
-    task: "",
-  },
-  lookup: {
-    label: "検索・参照",
-    task: `対象URLを開いてください。
-ログイン画面があれば、PoC用のユーザーでログインしてください。
-指定された検索画面を開き、条件に合うレコードを検索してください。
-検索結果の先頭を開き、必要な項目を読み取ってください。
-最後に、実行した操作、読み取った値、確認方法を要約してください。
-本番データや許可されていない外部サイトには移動しないでください。`,
-  },
-  update: {
-    label: "更新・再検証",
-    task: `対象URLを開き、PoC用のユーザーでログインしてください。
-指定されたレコードを検索し、現在値を確認してから指示された項目だけを更新してください。
-更新後は参照画面を開き直し、変更結果を再確認してください。
-最後に、変更前後の値、実行した操作、検証結果を要約してください。`,
-  },
-  report: {
-    label: "帳票・一覧確認",
-    task: `対象URLを開き、指定された期間と条件で一覧を表示してください。
-件数、ステータス、主要な集計値を読み取ってください。
-データの更新や削除は行わず、画面上で確認できた事実だけを報告してください。`,
-  },
-};
 
 export const PROVIDERS = {
   google: {
@@ -57,15 +23,11 @@ export const PROVIDERS = {
   },
 };
 
-export const INITIAL_FORM = {
-  targetUrl: DEFAULT_TARGET_URL,
-  task: SCENARIOS.lookup.task,
+export const INITIAL_SETTINGS = {
   allowedDomains: DEFAULT_TARGET_URL,
-  scenario: "lookup",
   provider: "google",
   model: PROVIDERS.google.defaultModel,
-  executionMode: "demo",
-  headless: true,
+  showBrowser: false,
   maxSteps: 30,
   preventWrites: true,
   preventSensitiveInput: true,
@@ -113,5 +75,12 @@ export function displayEntries(value) {
   return Object.entries(value)
     .filter(([, item]) => ["string", "number", "boolean"].includes(typeof item))
     .slice(0, 7);
+}
+
+export function screenshotSource(value) {
+  if (!value) return "";
+  return value.startsWith("data:")
+    ? value
+    : `data:image/png;base64,${value}`;
 }
 

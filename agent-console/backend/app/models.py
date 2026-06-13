@@ -16,7 +16,7 @@ class RunRequest(BaseModel):
     allowed_domains: list[str]
     provider: Literal["google", "openai", "anthropic", "browser-use"] = "google"
     model: str = Field(default="gemini-2.5-flash", min_length=1, max_length=200)
-    execution_mode: Literal["demo", "live"] = "demo"
+    conversation_id: str | None = Field(default=None, max_length=64)
     headless: bool = True
     max_steps: int = Field(default=30, ge=1, le=100)
     safety: SafetyOptions = Field(default_factory=SafetyOptions)
@@ -40,5 +40,5 @@ class RunRequest(BaseModel):
 
 class RunCreated(BaseModel):
     id: str
+    conversation_id: str
     status: str
-

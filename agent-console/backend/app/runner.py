@@ -22,6 +22,20 @@ def browser_use_available() -> bool:
     return importlib.util.find_spec("browser_use") is not None
 
 
+def browser_event_payload(
+    browser_state: Any,
+    *,
+    fallback_url: str,
+    step_number: int,
+) -> dict[str, Any]:
+    return {
+        "url": getattr(browser_state, "url", fallback_url),
+        "title": getattr(browser_state, "title", "対象アプリケーション"),
+        "screenshot": getattr(browser_state, "screenshot", None),
+        "frame": step_number,
+    }
+
+
 def provider_configuration() -> dict[str, bool]:
     return {
         "google": bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")),
@@ -65,12 +79,20 @@ def domain_matches(target_url: str, allowed_domains: list[str]) -> bool:
     return False
 
 
-def build_agent_task(request: RunRequest) -> str:
-    rules = [
-        f"Start from this URL: {request.target_url}",
+def build_agent_task(request: RunRequest, *, follow_up: bool = False) -> str:
+    rules = []
+    if follow_up:
+        rules.append(
+            "This is a follow-up instruction. Continue from the browser's current "
+            "page and preserve useful session state unless the new instruction requires otherwise. "
+            f"The original target URL was {request.target_url}."
+        )
+    else:
+        rules.append(f"Start from this URL: {request.target_url}")
+    rules.append(
         "Never navigate outside these allowed domains: "
-        + ", ".join(request.allowed_domains),
-    ]
+        + ", ".join(request.allowed_domains)
+    )
     if request.safety.prevent_writes:
         rules.append("Do not create, update, submit, delete, or otherwise modify data.")
     if request.safety.prevent_sensitive_input:
@@ -87,8 +109,8 @@ def build_agent_task(request: RunRequest) -> str:
         )
 
     rules.append(
-        "Finish with a concise summary of actions, extracted values, verification "
-        "evidence, and any uncertainty."
+        "Finish with a concise answer to the user that includes actions, extracted "
+        "values, verification evidence, and any uncertainty."
     )
     return f"{request.task.strip()}\n\nSafety and execution constraints:\n- " + "\n- ".join(rules)
 
@@ -96,6 +118,7 @@ def build_agent_task(request: RunRequest) -> str:
 @dataclass
 class RunRecord:
     id: str
+    conversation_id: str
     request: RunRequest
     status: str = "queued"
     created_at: str = field(default_factory=utc_time)
@@ -109,6 +132,7 @@ class RunRecord:
             {
                 "type": event_type,
                 "run_id": self.id,
+                "conversation_id": self.conversation_id,
                 "time": utc_time(),
                 **payload,
             }
@@ -120,16 +144,57 @@ class RunRecord:
         self.emit("status", status=status)
 
 
+@dataclass
+class AgentSession:
+    id: str
+    signature: tuple[Any, ...]
+    browser: Any = None
+    agent: Any = None
+    run_count: int = 0
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
 class RunManager:
     def __init__(self) -> None:
         self.runs: dict[str, RunRecord] = {}
+        self.sessions: dict[str, AgentSession] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
+
+    @staticmethod
+    def _session_signature(request: RunRequest) -> tuple[Any, ...]:
+        return (
+            request.target_url,
+            tuple(request.allowed_domains),
+            request.provider,
+            request.model,
+            request.headless,
+        )
 
     def create(self, request: RunRequest) -> RunRecord:
         if not domain_matches(request.target_url, request.allowed_domains):
             raise ValueError("対象URLが許可ドメインに含まれていません。")
 
-        run = RunRecord(id=uuid.uuid4().hex[:12], request=request)
+        conversation_id = request.conversation_id or uuid.uuid4().hex[:12]
+        signature = self._session_signature(request)
+        session = self.sessions.get(conversation_id)
+        if session and session.signature != signature:
+            raise ValueError(
+                "同じ会話では対象URL・許可ドメイン・モデル設定を変更できません。"
+                "新しい会話を開始してください。"
+            )
+        if session and session.lock.locked():
+            raise ValueError("この会話では別の指示を実行中です。")
+        if not session:
+            self.sessions[conversation_id] = AgentSession(
+                id=conversation_id,
+                signature=signature,
+            )
+
+        run = RunRecord(
+            id=uuid.uuid4().hex[:12],
+            conversation_id=conversation_id,
+            request=request,
+        )
         self.runs[run.id] = run
         task = asyncio.create_task(self._execute(run))
         self._tasks.add(task)
@@ -139,12 +204,20 @@ class RunManager:
     def get(self, run_id: str) -> RunRecord | None:
         return self.runs.get(run_id)
 
+    async def close_conversation(self, conversation_id: str) -> bool:
+        session = self.sessions.pop(conversation_id, None)
+        if not session:
+            return False
+        async with session.lock:
+            if session.browser is not None:
+                await session.browser.kill()
+            if session.agent is not None:
+                await session.agent.close()
+        return True
+
     async def _execute(self, run: RunRecord) -> None:
         try:
-            if run.request.execution_mode == "demo":
-                await self._execute_demo(run)
-            else:
-                await self._execute_live(run)
+            await self._execute_live(run)
         except asyncio.CancelledError:
             if run.status not in TERMINAL_STATUSES:
                 run.set_status("stopped")
@@ -153,88 +226,11 @@ class RunManager:
             run.emit("error", message=str(exc))
             run.set_status("failed")
 
-    async def _execute_demo(self, run: RunRecord) -> None:
-        run.started_at = asyncio.get_running_loop().time()
-        run.set_status("running")
-        run.emit(
-            "browser",
-            url=run.request.target_url,
-            title="対象アプリケーション",
-            screenshot=None,
-        )
-
-        demo_steps = [
-            (
-                "planning",
-                "計画",
-                "指示と安全条件を分解",
-                "対象URL、許可範囲、完了条件を確認しています。",
-                [{"plan": "open → authenticate if needed → locate → verify → summarize"}],
-            ),
-            (
-                "observation",
-                "観察",
-                "画面構造を読み取り",
-                "利用可能なナビゲーションと入力項目を識別しています。",
-                [{"observe": "visible controls and current application state"}],
-            ),
-            (
-                "action",
-                "操作",
-                "対象レコードへ移動",
-                "検索条件を入力し、先頭の結果から詳細画面を開いています。",
-                [{"action": "search and open the first matching result"}],
-            ),
-            (
-                "verification",
-                "検証",
-                "表示値と操作結果を確認",
-                "取得値を画面上で再確認し、実行結果を整理しています。",
-                [{"verify": "compare extracted values with visible details"}],
-            ),
-        ]
-
-        for index, (stage, label, title, detail, actions) in enumerate(demo_steps, 1):
-            if run.stop_requested:
-                run.set_status("stopped")
-                return
-            run.emit(
-                "step",
-                step=index,
-                stage=stage,
-                label=label,
-                title=title,
-                detail=detail,
-                actions=actions,
-                status="active",
-            )
-            await asyncio.sleep(0.75)
-            run.emit("step_update", step=index, status="completed")
-
-        duration = round(asyncio.get_running_loop().time() - run.started_at, 2)
-        run.emit(
-            "result",
-            success=True,
-            result={
-                "summary": (
-                    "対象アプリケーションを開き、指定条件で検索し、先頭結果の"
-                    "詳細と主要項目を画面上で確認しました。"
-                ),
-                "record_id": "DEMO-001",
-                "status": "確認済み",
-                "last_updated": "2026-06-12 15:40",
-                "verification": "詳細画面を再表示して一致を確認",
-                "note": "デモ再生のサンプル結果です。実ブラウザモードでは実際の観察値を返します。",
-            },
-            duration_seconds=duration,
-            steps=len(demo_steps),
-        )
-        run.set_status("completed")
-
     async def _execute_live(self, run: RunRecord) -> None:
         if not browser_use_available():
             raise RuntimeError(
-                "Browser Useがインストールされていません。`uv sync --extra live`を実行してください。"
+                "Browser Useがインストールされていません。"
+                "`uv sync --extra live`を実行してください。"
             )
 
         configured = provider_configuration()
@@ -265,109 +261,138 @@ class RunManager:
         )
         trace_dir.mkdir(parents=True, exist_ok=True)
 
-        browser = Browser(
-            browser_profile=BrowserProfile(
-                headless=run.request.headless,
-                allowed_domains=run.request.allowed_domains,
-                window_size={"width": 1280, "height": 900},
-                traces_dir=str(trace_dir),
-            )
-        )
-        run.started_at = asyncio.get_running_loop().time()
-        run.set_status("running")
-        run.emit(
-            "browser",
-            url=run.request.target_url,
-            title="対象アプリケーション",
-            screenshot=None,
-        )
+        session = self.sessions[run.conversation_id]
+        async with session.lock:
+            run.started_at = asyncio.get_running_loop().time()
+            run.set_status("running")
 
-        async def on_step(
-            browser_state: Any,
-            agent_output: Any,
-            step_number: int,
-        ) -> None:
-            state = (
-                browser_state.model_dump(exclude_none=True)
-                if hasattr(browser_state, "model_dump")
-                else {}
-            )
-            output = (
-                agent_output.model_dump(exclude_none=True)
-                if hasattr(agent_output, "model_dump")
-                else {}
-            )
-            run.emit(
-                "browser",
-                url=state.get("url") or run.request.target_url,
-                title=state.get("title") or "対象アプリケーション",
-                screenshot=state.get("screenshot"),
-            )
-            run.emit(
-                "step",
-                step=step_number,
-                stage="observation",
-                label="観察と操作",
-                title=output.get("next_goal") or f"ステップ {step_number}",
-                detail=(
-                    output.get("thinking")
-                    or output.get("evaluation_previous_goal")
-                    or "ブラウザの状態を確認しています。"
-                ),
-                actions=output.get("action") or output.get("actions") or [],
-                status="active",
-            )
-            if step_number > 1:
-                run.emit("step_update", step=step_number - 1, status="completed")
+            async def on_step(
+                browser_state: Any,
+                agent_output: Any,
+                step_number: int,
+            ) -> None:
+                output = (
+                    agent_output.model_dump(exclude_none=True)
+                    if hasattr(agent_output, "model_dump")
+                    else {}
+                )
+                run.emit(
+                    "browser",
+                    **browser_event_payload(
+                        browser_state,
+                        fallback_url=run.request.target_url,
+                        step_number=step_number,
+                    ),
+                )
+                run.emit(
+                    "step",
+                    step=step_number,
+                    stage="observation",
+                    label="観察と操作",
+                    title=output.get("next_goal") or f"ステップ {step_number}",
+                    detail=(
+                        output.get("thinking")
+                        or output.get("evaluation_previous_goal")
+                        or "ブラウザの状態を確認しています。"
+                    ),
+                    actions=output.get("action") or output.get("actions") or [],
+                    status="active",
+                )
+                if step_number > 1:
+                    run.emit(
+                        "step_update",
+                        step=step_number - 1,
+                        status="completed",
+                    )
 
-        async def should_stop() -> bool:
-            return run.stop_requested
+            async def should_stop() -> bool:
+                return run.stop_requested
 
-        agent = Agent(
-            task=build_agent_task(run.request),
-            llm=llm_classes[run.request.provider](model=run.request.model),
-            browser=browser,
-            register_new_step_callback=on_step,
-            register_should_stop_callback=should_stop,
-            calculate_cost=True,
-        )
+            if session.agent is None:
+                session.browser = Browser(
+                    browser_profile=BrowserProfile(
+                        headless=run.request.headless,
+                        allowed_domains=run.request.allowed_domains,
+                        keep_alive=True,
+                        window_size={"width": 1280, "height": 900},
+                        traces_dir=str(trace_dir),
+                    )
+                )
+                session.agent = Agent(
+                    task=build_agent_task(run.request),
+                    llm=llm_classes[run.request.provider](model=run.request.model),
+                    browser=session.browser,
+                    register_new_step_callback=on_step,
+                    register_should_stop_callback=should_stop,
+                    calculate_cost=True,
+                )
+            else:
+                session.agent.register_new_step_callback = on_step
+                session.agent.register_should_stop_callback = should_stop
+                session.agent.add_new_task(
+                    build_agent_task(run.request, follow_up=True)
+                )
 
-        try:
-            history = await agent.run(max_steps=run.request.max_steps)
+            history = await session.agent.run(max_steps=run.request.max_steps)
+            session.run_count += 1
             if run.stop_requested:
                 run.set_status("stopped")
                 return
 
-            final_result = history.final_result() if hasattr(history, "final_result") else str(history)
+            if history.history:
+                last_step = len(history.history)
+                run.emit("step_update", step=last_step, status="completed")
+                screenshots = history.screenshots(n_last=1)
+                if screenshots and screenshots[0]:
+                    final_state = history.history[-1].state
+                    run.emit(
+                        "browser",
+                        url=final_state.url,
+                        title=final_state.title,
+                        screenshot=screenshots[0],
+                        frame=last_step,
+                    )
+
+            final_result = (
+                history.final_result()
+                if hasattr(history, "final_result")
+                else str(history)
+            )
             success = (
                 history.is_successful()
                 if hasattr(history, "is_successful")
                 else True
             )
-            duration = round(asyncio.get_running_loop().time() - run.started_at, 2)
+            duration = round(
+                asyncio.get_running_loop().time() - run.started_at,
+                2,
+            )
             run.emit(
                 "result",
                 success=success,
                 result={
                     "summary": final_result or "エージェントの実行が完了しました。",
-                    "visited_urls": history.urls() if hasattr(history, "urls") else [],
+                    "visited_urls": (
+                        history.urls()
+                        if hasattr(history, "urls")
+                        else []
+                    ),
                     "actions": (
                         history.action_names()
                         if hasattr(history, "action_names")
                         else []
                     ),
-                    "errors": history.errors() if hasattr(history, "errors") else [],
+                    "errors": (
+                        history.errors()
+                        if hasattr(history, "errors")
+                        else []
+                    ),
                     "verification": "Browser Useの実行履歴と最終画面に基づく結果",
                 },
                 duration_seconds=duration,
+                follow_up=session.run_count > 1,
             )
             run.set_status("completed" if success is not False else "failed")
-        finally:
-            try:
-                await browser.close()
-            except Exception as exc:
-                run.emit("warning", message=f"Browser close warning: {exc}")
 
 
 manager = RunManager()
-

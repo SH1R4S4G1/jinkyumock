@@ -1,45 +1,33 @@
-.composer > .panel-title {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  background: var(--surface);
-}
-
-@media (min-width: 1381px) {
+@media (max-width: 1380px) {
   .workbench {
-    grid-template-columns: 350px minmax(600px, 1fr) 430px;
+    grid-template-columns: 320px minmax(470px, 1fr) 360px;
   }
 
-  .workbench.composer-collapsed {
-    grid-template-columns: 58px minmax(700px, 1fr) 430px;
-  }
-
-  .workbench.timeline-collapsed {
-    grid-template-columns: 350px minmax(700px, 1fr) 58px;
-  }
-
-  .workbench.composer-collapsed.timeline-collapsed,
-  .workbench.browser-expanded {
-    grid-template-columns: 58px minmax(800px, 1fr) 58px;
+  .rail-metric {
+    min-width: 122px;
+    padding-inline: 12px;
   }
 }
 
-@media (max-height: 1050px) and (min-width: 901px) {
-  .composer-form {
-    gap: 11px;
+@media (max-height: 800px) and (min-width: 901px) {
+  .conversation-feed {
+    padding-top: 13px;
   }
 
-  .control-group textarea {
-    min-height: 140px;
+  .chat-input-shell textarea {
+    min-height: 70px;
   }
 
-  .safety-fieldset {
-    gap: 6px;
-    padding: 8px;
+  .timeline-item {
+    padding-block: 7px 10px;
+  }
+
+  .evidence-panel {
+    padding: 11px 13px;
   }
 }
 
-@media (max-width: 1179px) {
+@media (max-width: 1119px) {
   html,
   body,
   #root {
@@ -47,20 +35,11 @@
   }
 
   .workbench {
-    grid-template-columns: 290px minmax(390px, 1fr) 300px;
+    grid-template-columns: 300px minmax(430px, 1fr) 320px;
   }
 
-  .workbench.composer-collapsed {
-    grid-template-columns: 58px minmax(470px, 1fr) 300px;
-  }
-
-  .workbench.timeline-collapsed {
-    grid-template-columns: 290px minmax(470px, 1fr) 58px;
-  }
-
-  .rail-metric {
-    min-width: 112px;
-    padding-inline: 10px;
+  .model-chip {
+    max-width: 220px;
   }
 }
 
@@ -90,41 +69,28 @@
   }
 
   .workbench,
-  .workbench.composer-collapsed,
-  .workbench.timeline-collapsed,
-  .workbench.composer-collapsed.timeline-collapsed,
   .workbench.browser-expanded {
     display: flex;
     flex-direction: column;
     gap: 1px;
   }
 
-  .composer,
-  .browser-panel,
-  .timeline-panel {
-    width: 100%;
+  .workbench.browser-expanded .conversation-panel,
+  .workbench.browser-expanded .trace-panel {
+    visibility: visible;
   }
 
-  .composer {
-    overflow: visible;
+  .conversation-panel {
+    min-height: 640px;
   }
 
   .browser-panel {
-    height: min(76vh, 720px);
+    height: min(78vh, 720px);
     min-height: 520px;
   }
 
-  .timeline-panel {
-    overflow: visible;
-  }
-
-  .timeline-content {
-    height: auto;
-    overflow: visible;
-  }
-
-  .result-panel {
-    margin-top: 0;
+  .trace-panel {
+    min-height: 620px;
   }
 
   .run-rail {
@@ -147,36 +113,32 @@
   .stop-button {
     min-height: 42px;
   }
-
-  .composer-collapsed .composer .panel-title,
-  .timeline-collapsed .timeline-panel .panel-title {
-    align-items: center;
-    justify-content: space-between;
-    height: 53px;
-    padding: 9px 14px;
-  }
-
-  .composer-collapsed .composer .panel-title > div,
-  .timeline-collapsed .timeline-panel .panel-title > div {
-    display: block;
-  }
 }
 
 @media (max-width: 620px) {
   .topbar {
-    padding-inline: 12px;
+    padding-inline: 11px;
   }
 
-  .model-chip {
-    display: none;
+  .model-chip,
+  .settings-button {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+    overflow: hidden;
+    font-size: 0;
+  }
+
+  .settings-button svg {
+    flex: 0 0 auto;
   }
 
   .connection-chip {
     padding-inline: 8px;
   }
 
-  .browser-panel {
-    min-height: 450px;
+  .conversation-panel {
+    min-height: 590px;
   }
 
   .browser-toolbar {
@@ -187,30 +149,15 @@
     display: none;
   }
 
-  .view-switcher button {
-    padding-inline: 6px;
-    font-size: 9px;
+  .browser-panel {
+    min-height: 450px;
   }
 
-  .preview-note {
-    right: 6px;
-    bottom: 6px;
-    max-width: calc(100% - 12px);
-  }
-
-  .composer-form {
-    padding: 14px 12px;
+  .settings-drawer {
+    width: 100%;
   }
 
   .two-column-controls {
     grid-template-columns: 1fr;
-  }
-
-  .environment-popover {
-    position: fixed;
-    top: 48px;
-    right: 8px;
-    left: 8px;
-    width: auto;
   }
 }

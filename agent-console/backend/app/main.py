@@ -42,7 +42,6 @@ app.add_middleware(
 def health() -> dict[str, object]:
     return {
         "status": "ok",
-        "demo_available": True,
         "browser_use_available": browser_use_available(),
         "providers": provider_configuration(),
     }
@@ -54,7 +53,11 @@ async def create_run(request: RunRequest) -> RunCreated:
         run = manager.create(request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return RunCreated(id=run.id, status=run.status)
+    return RunCreated(
+        id=run.id,
+        conversation_id=run.conversation_id,
+        status=run.status,
+    )
 
 
 @app.get("/api/runs/{run_id}")
@@ -119,7 +122,13 @@ def stop_run(run_id: str) -> dict[str, str]:
     return {"status": "stopping"}
 
 
+@app.delete("/api/conversations/{conversation_id}")
+async def close_conversation(conversation_id: str) -> dict[str, str]:
+    if not await manager.close_conversation(conversation_id):
+        raise HTTPException(status_code=404, detail="会話IDが見つかりません。")
+    return {"status": "closed"}
+
+
 frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if frontend_dist.exists():
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
-
